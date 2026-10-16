@@ -1,0 +1,10 @@
+[Unit]
+Description=Auto-print ZPL labels saved to ~/Downloads
+
+[Service]
+ExecStart=%h/.local/bin/zpl-autoprint
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

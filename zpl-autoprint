@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Watch a directory and send every new .zpl file to a Zebra printer as raw ZPL.
+#
+# Config (environment):
+#   ZPL_WATCH_DIR  directory to watch        (default: ~/Downloads)
+#   ZPL_PRINTER    CUPS queue to print to    (default: Zebra_GK420t)
+#   ZPL_SETTLE     seconds to wait after a file appears before printing (default: 1)
+
+set -uo pipefail
+
+WATCH_DIR="${ZPL_WATCH_DIR:-$HOME/Downloads}"
+PRINTER="${ZPL_PRINTER:-Zebra_GK420t}"
+SETTLE="${ZPL_SETTLE:-1}"
+
+# Files already printed this session, keyed by inode:size:mtime, so the
+# close_write + moved_to pair some browsers produce only prints once.
+declare -A printed
+
+log() { echo "$*"; }
+
+notify() {
+    command -v notify-send >/dev/null && notify-send -a "ZPL Autoprint" -i printer "$@" 2>/dev/null || true
+}
+
+handle() {
+    local file="$1" name key
+    name="$(basename -- "$file")"
+
+    shopt -s nocasematch
+    [[ "$name" == *.zpl ]] || return 0
+    shopt -u nocasematch
+
+    sleep "$SETTLE"
+    # Firefox creates an empty placeholder before the real download lands.
+    [[ -f "$file" && -s "$file" ]] || return 0
+
+    key="$(stat -c '%i:%s:%Y' -- "$file")" || return 0
+    [[ -n "${printed[$key]:-}" ]] && return 0
+
+    if ! grep -q '\^XA' -- "$file"; then
+        log "skip (no ^XA, not ZPL): $name"
+        return 0
+    fi
+
+    if lp -d "$PRINTER" -o raw -t "$name" -- "$file" >/dev/null; then
+        printed[$key]=1
+        log "printed: $name"
+        notify "Label printed" "$name"
+    else
+        log "print FAILED: $name"
+        notify -u critical "Label print failed" "$name"
+    fi
+}
+
+command -v inotifywait >/dev/null || { echo "inotifywait not found (install inotify-tools)" >&2; exit 1; }
+[[ -d "$WATCH_DIR" ]] || { echo "watch dir does not exist: $WATCH_DIR" >&2; exit 1; }
+
+log "watching $WATCH_DIR for .zpl files -> $PRINTER"
+
+inotifywait -m -q -e close_write -e moved_to --format '%w%f' -- "$WATCH_DIR" |
+    while IFS= read -r file; do
+        handle "$file"
+    done
