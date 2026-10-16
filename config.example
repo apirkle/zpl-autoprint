@@ -1,0 +1,15 @@
+# zpl-autoprint config
+# Location: ~/.config/zpl-autoprint/config
+# After editing: systemctl --user restart zpl-autoprint
+
+# CUPS queue to print to (see: lpstat -p). Blank = CUPS default printer.
+PRINTER=
+
+# Directory to watch for new .zpl files.
+WATCH_DIR=~/Downloads
+
+# Seconds to wait after a file appears before printing it.
+SETTLE_SECONDS=1
+
+# Show a desktop notification for each label (yes/no).
+NOTIFY=yes

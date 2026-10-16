@@ -1,5 +1,6 @@
 [Unit]
-Description=Auto-print ZPL labels saved to ~/Downloads
+Description=Auto-print ZPL label files from a watched directory
+Documentation=https://github.com/apirkle/zpl-autoprint
 
 [Service]
 ExecStart=%h/.local/bin/zpl-autoprint

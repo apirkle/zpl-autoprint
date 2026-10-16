@@ -1,16 +1,70 @@
 #!/usr/bin/env bash
-# Watch a directory and send every new .zpl file to a Zebra printer as raw ZPL.
+# zpl-autoprint: watch a directory and send every new .zpl file to a
+# label printer as raw ZPL via CUPS.
 #
-# Config (environment):
-#   ZPL_WATCH_DIR  directory to watch        (default: ~/Downloads)
-#   ZPL_PRINTER    CUPS queue to print to    (default: Zebra_GK420t)
-#   ZPL_SETTLE     seconds to wait after a file appears before printing (default: 1)
+# Settings come from (highest priority first):
+#   1. environment: ZPL_PRINTER, ZPL_WATCH_DIR, ZPL_SETTLE_SECONDS, ZPL_NOTIFY
+#   2. config file: $XDG_CONFIG_HOME/zpl-autoprint/config (or --config PATH)
+#   3. defaults:    CUPS default printer, ~/Downloads, 1 second, notify on
 
 set -uo pipefail
 
-WATCH_DIR="${ZPL_WATCH_DIR:-$HOME/Downloads}"
-PRINTER="${ZPL_PRINTER:-Zebra_GK420t}"
-SETTLE="${ZPL_SETTLE:-1}"
+VERSION="1.0.0"
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/zpl-autoprint/config"
+
+usage() {
+    cat <<EOF
+Usage: zpl-autoprint [--config PATH] [--help] [--version]
+
+Watch a directory and print each new .zpl file raw to a CUPS printer.
+
+Config file: $CONFIG
+  PRINTER=Zebra_GK420t     CUPS queue name (default: CUPS default printer)
+  WATCH_DIR=~/Downloads    directory to watch
+  SETTLE_SECONDS=1         wait after a file lands before printing
+  NOTIFY=yes               desktop notifications (yes/no)
+
+Each setting can be overridden with an environment variable of the same
+name prefixed with ZPL_, e.g. ZPL_PRINTER=other_queue.
+EOF
+}
+
+while (($#)); do
+    case "$1" in
+        -c|--config) CONFIG="${2:?--config needs a path}"; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        -V|--version) echo "zpl-autoprint $VERSION"; exit 0 ;;
+        *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+# Read KEY=value lines from the config file without executing it.
+declare -A cfg
+if [[ -f "$CONFIG" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        [[ "$line" =~ ^[[:space:]]*([A-Z_]+)[[:space:]]*=[[:space:]]*(.*[^[:space:]])?[[:space:]]*$ ]] || continue
+        val="${BASH_REMATCH[2]}"
+        val="${val#[\"\']}"; val="${val%[\"\']}"
+        cfg[${BASH_REMATCH[1]}]="$val"
+    done < "$CONFIG"
+fi
+
+setting() { # setting NAME DEFAULT
+    local env="ZPL_$1"
+    printf '%s' "${!env:-${cfg[$1]:-$2}}"
+}
+
+PRINTER="$(setting PRINTER "")"
+WATCH_DIR="$(setting WATCH_DIR "$HOME/Downloads")"
+SETTLE="$(setting SETTLE_SECONDS 1)"
+NOTIFY="$(setting NOTIFY yes)"
+WATCH_DIR="${WATCH_DIR/#\~/$HOME}"
+
+if [[ -z "$PRINTER" ]]; then
+    PRINTER="$(lpstat -d 2>/dev/null | sed -n 's/^system default destination: //p')"
+    [[ -n "$PRINTER" ]] || { echo "no PRINTER configured and no CUPS default printer set" >&2; exit 1; }
+fi
 
 # Files already printed this session, keyed by inode:size:mtime, so the
 # close_write + moved_to pair some browsers produce only prints once.
@@ -19,7 +73,8 @@ declare -A printed
 log() { echo "$*"; }
 
 notify() {
-    command -v notify-send >/dev/null && notify-send -a "ZPL Autoprint" -i printer "$@" 2>/dev/null || true
+    [[ "$NOTIFY" == yes ]] || return 0
+    command -v notify-send >/dev/null && notify-send -a "zpl-autoprint" -i printer "$@" 2>/dev/null || true
 }
 
 handle() {
@@ -27,7 +82,7 @@ handle() {
     name="$(basename -- "$file")"
 
     shopt -s nocasematch
-    [[ "$name" == *.zpl ]] || return 0
+    [[ "$name" == *.zpl ]] || { shopt -u nocasematch; return 0; }
     shopt -u nocasematch
 
     sleep "$SETTLE"
@@ -53,7 +108,9 @@ handle() {
 }
 
 command -v inotifywait >/dev/null || { echo "inotifywait not found (install inotify-tools)" >&2; exit 1; }
+command -v lp >/dev/null || { echo "lp not found (install CUPS)" >&2; exit 1; }
 [[ -d "$WATCH_DIR" ]] || { echo "watch dir does not exist: $WATCH_DIR" >&2; exit 1; }
+lpstat -p "$PRINTER" >/dev/null 2>&1 || log "warning: CUPS printer '$PRINTER' not found; prints will fail until it exists"
 
 log "watching $WATCH_DIR for .zpl files -> $PRINTER"
 
